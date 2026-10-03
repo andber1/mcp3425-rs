@@ -149,6 +149,7 @@ use measurements::voltage::Voltage;
 
 /// All possible errors in this crate
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error<E> {
     /// I2C bus error
     I2c(E),
