@@ -22,10 +22,6 @@
 //!
 //! - `dual_channel` for dual-channel support (MCP3426/7/8)
 //! - `quad_channel` for dual-channel support (MCP3428)
-//! - `measurements`: Use the
-//!   [measurements](https://github.com/thejpster/rust-measurements) crate
-//!   to represent voltages instead of the custom
-//!   [`Voltage`](https://docs.rs/mcp3425/*/mcp3425/struct.Voltage.html) wrapper
 //!
 //! ## Usage
 //!
@@ -148,9 +144,7 @@ use embedded_hal::blocking::{
     i2c::{Read, Write, WriteRead},
 };
 
-#[cfg(feature = "measurements")]
 extern crate measurements;
-#[cfg(feature = "measurements")]
 use measurements::voltage::Voltage;
 
 /// All possible errors in this crate
@@ -304,6 +298,16 @@ impl Gain {
     pub fn bits(&self) -> u8 {
         *self as u8
     }
+
+    /// Return the amplification factor for this gain configuration.
+    pub fn factor(&self) -> u8 {
+        match *self {
+            Gain::Gain1 => 1,
+            Gain::Gain2 => 2,
+            Gain::Gain4 => 4,
+            Gain::Gain8 => 8,
+        }
+    }
 }
 
 impl Default for Gain {
@@ -422,31 +426,6 @@ impl Config {
     }
 }
 
-/// A voltage measurement.
-#[cfg(not(feature = "measurements"))]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Voltage {
-    millivolts: i16,
-}
-
-#[cfg(not(feature = "measurements"))]
-impl Voltage {
-    /// Create a new `Voltage` instance from a millivolt measurement.
-    pub fn from_millivolts(millivolts: i16) -> Self {
-        Self { millivolts }
-    }
-
-    /// Return the voltage in millivolts.
-    pub fn as_millivolts(&self) -> i16 {
-        self.millivolts
-    }
-
-    /// Return the voltage in volts.
-    pub fn as_volts(&self) -> f32 {
-        self.millivolts as f32 / 1000.0
-    }
-}
-
 /// Driver for the MCP3425 ADC
 #[derive(Debug, Default)]
 pub struct MCP3425<I2C, D, M> {
@@ -498,6 +477,7 @@ where
         &self,
         measurement: i16,
         resolution: &Resolution,
+        gain: &Gain,
     ) -> Result<Voltage, Error<E>> {
         // Handle saturation / out of range values
         if measurement == resolution.max() {
@@ -506,12 +486,10 @@ where
             return Err(Error::VoltageTooLow);
         }
 
-        let converted =
-            measurement as i32 * (REF_MILLIVOLTS * 2) as i32 / (1 << resolution.res_bits());
-        // The "allow" annotation is needed because there are different Voltage
-        // types, depending on the build flags.
-        #[allow(clippy::useless_conversion)]
-        Ok(Voltage::from_millivolts((converted as i16).into()))
+        let fraction = measurement as f64 / (1 << resolution.res_bits()) as f64;
+        Ok(Voltage::from_millivolts(
+            fraction * 2.0 * REF_MILLIVOLTS as f64 / gain.factor() as f64,
+        ))
     }
 
     /// Destroy the driver instance and return the I2C device.
@@ -578,7 +556,7 @@ where
         }
 
         // Calculate voltage from raw value
-        let voltage = self.calculate_voltage(measurement, &config.resolution)?;
+        let voltage = self.calculate_voltage(measurement, &config.resolution, &config.gain)?;
 
         Ok(voltage)
     }
@@ -670,7 +648,7 @@ where
         let (measurement, config_reg) = self.read_i16_and_config()?;
 
         // Calculate voltage from raw value
-        let voltage = self.calculate_voltage(measurement, &config.resolution)?;
+        let voltage = self.calculate_voltage(measurement, &config.resolution, &config.gain)?;
 
         // Check "Not Ready" flag. See datasheet section 5.1.1 for more details.
         if config_reg.is_ready() {
@@ -697,18 +675,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    #[cfg(not(feature = "measurements"))]
-    fn test_voltage_wrapper() {
-        let a = Voltage::from_millivolts(2500);
-        assert_eq!(a.as_millivolts(), 2500i16);
-        assert_eq!(a.as_volts(), 2.5f32);
-
-        let b = Voltage::from_millivolts(-100);
-        assert_eq!(b.as_millivolts(), -100i16);
-        assert_eq!(b.as_volts(), -0.1f32);
-    }
-
     /// Instantiation in one-shot mode should not do any calls to the I2C bus.
     #[test]
     fn test_instantiation_oneshot() {
@@ -734,7 +700,6 @@ mod tests {
     #[case(0b00000000, 0b00000000, 0)]
     #[case(0b11111111, 0b11111111, -1)]
     #[case(0b11111000, 0b00000001, -2047)] // Minimum (at 12 bits) + 1
-    #[cfg(not(feature = "measurements"))]
     fn test_read_voltage_oneshot(
         #[case] byte0: u8,
         #[case] byte1: u8,
@@ -755,7 +720,34 @@ mod tests {
         let dev = I2cMock::new(&expectations);
         let mut adc = MCP3425::oneshot(dev, addr, NoopDelay);
         let voltage = adc.measure(&Config::default()).expect("Measuring failed");
-        assert_eq!(voltage.as_millivolts(), expected_millivolts);
+        assert_eq!(voltage.as_millivolts().round() as i16, expected_millivolts);
+        adc.destroy().done();
+    }
+
+    #[rstest]
+    #[case(0, Resolution::Bits12Sps240, Gain::Gain1, 0)]
+    #[case(2000, Resolution::Bits12Sps240, Gain::Gain1, 2000)]
+    #[case(2000, Resolution::Bits12Sps240, Gain::Gain2, 1000)]
+    #[case(2000, Resolution::Bits12Sps240, Gain::Gain4, 500)]
+    #[case(2000, Resolution::Bits12Sps240, Gain::Gain8, 250)]
+    #[case(8000, Resolution::Bits14Sps60, Gain::Gain1, 2000)]
+    #[case(32000, Resolution::Bits16Sps15, Gain::Gain1, 2000)]
+    #[case(-32000, Resolution::Bits16Sps15, Gain::Gain1, -2000)]
+    #[case(-32000, Resolution::Bits16Sps15, Gain::Gain8, -250)]
+
+    fn test_calculate_voltage(
+        #[case] measurement: i16,
+        #[case] resolution: Resolution,
+        #[case] gain: Gain,
+        #[case] expected_millivolts: i16,
+    ) {
+        let adc = MCP3425::oneshot(I2cMock::new(&[]), 0x42, NoopDelay);
+
+        let voltage = adc
+            .calculate_voltage(measurement, &resolution, &gain)
+            .unwrap();
+
+        assert_eq!(voltage.as_millivolts().round() as i16, expected_millivolts);
         adc.destroy().done();
     }
 
@@ -830,7 +822,6 @@ mod tests {
     /// Test that the configs are written correctly.
     #[rstest]
     #[case(Resolution::Bits14Sps60, Gain::Gain8, 0b10000111)]
-    #[cfg(not(feature = "measurements"))]
     fn test_config(#[case] resolution: Resolution, #[case] gain: Gain, #[case] expected: u8) {
         let addr = 0x42;
         let expectations = [
@@ -848,7 +839,7 @@ mod tests {
             )
             .expect("Measuring failed");
         assert_eq!(voltage.as_volts(), 0.0);
-        assert_eq!(voltage.as_millivolts(), 0);
+        assert_eq!(voltage.as_millivolts().round() as i16, 0);
         adc.destroy().done();
     }
 }
