@@ -34,7 +34,6 @@
 //! [`OneShotMode`](struct.OneShotMode.html):
 //!
 //! ```no_run
-//! # extern crate linux_embedded_hal;
 //! use linux_embedded_hal::{Delay, I2cdev};
 //! use mcp3425::{MCP3425, Config, Resolution, Gain, Error, OneShotMode};
 //!
@@ -83,21 +82,20 @@
 //! You can trigger a one-shot measurement:
 //!
 //! ```no_run
-//! # extern crate linux_embedded_hal;
 //! # use linux_embedded_hal::{Delay, I2cdev};
 //! # use mcp3425::{MCP3425, Config, Resolution, Gain, Error};
 //! # fn main() {
 //! # use mcp3425::Channel;
 //! let dev = I2cdev::new("/dev/i2c-1").unwrap();
-//! # let address = 0x68;
+//! let address = 0x68;
 //! let mut adc = MCP3425::oneshot(dev, address, Delay);
 //! let config = Config::default();
 //! match adc.measure(&config) {
 //!     Ok(voltage) => println!("ADC measured {} mV", voltage.as_millivolts()),
-//!     Err(Error::I2c(e)) => println!("An I2C error happened: {}", e),
-//!     Err(Error::VoltageTooHigh) => println!("Voltage is too high to measure"),
-//!     Err(Error::VoltageTooLow) => println!("Voltage is too low to measure"),
-//!     Err(Error::NotReady) => println!("Measurement not yet ready. This is a driver bug."),
+//!     Err(Error::I2c(e)) => eprintln!("An I2C error happened: {}", e),
+//!     Err(Error::VoltageTooHigh) => eprintln!("Voltage is too high to measure"),
+//!     Err(Error::VoltageTooLow) => eprintln!("Voltage is too low to measure"),
+//!     Err(Error::NotReady) => eprintln!("Measurement not yet ready. This is a driver bug."),
 //!     Err(Error::NotInitialized) => unreachable!(),
 //! }
 //! # }
@@ -111,23 +109,22 @@
 //! You can also configure the ADC in continuous mode:
 //!
 //! ```no_run
-//! # extern crate linux_embedded_hal;
 //! # use linux_embedded_hal::{Delay, I2cdev};
 //! # use mcp3425::{MCP3425, Config, Resolution, Gain, Error};
 //! # fn main() {
 //! # use mcp3425::Channel;
 //! let dev = I2cdev::new("/dev/i2c-1").unwrap();
-//! # let address = 0x68;
+//! let address = 0x68;
 //! let mut adc = MCP3425::continuous(dev, address, Delay);
 //! let config = Config::default();
 //! adc.set_config(&config).unwrap();
 //! match adc.read_measurement() {
 //!     Ok(voltage) => println!("ADC measured {} mV", voltage.as_millivolts()),
-//!     Err(Error::I2c(e)) => println!("An I2C error happened: {}", e),
-//!     Err(Error::VoltageTooHigh) => println!("Voltage is too high to measure"),
-//!     Err(Error::VoltageTooLow) => println!("Voltage is too low to measure"),
-//!     Err(Error::NotReady) => println!("Measurement not yet ready. Polling too fast?"),
-//!     Err(Error::NotInitialized) => println!("You forgot to call .set_config"),
+//!     Err(Error::I2c(e)) => eprintln!("An I2C error happened: {}", e),
+//!     Err(Error::VoltageTooHigh) => eprintln!("Voltage is too high to measure"),
+//!     Err(Error::VoltageTooLow) => eprintln!("Voltage is too low to measure"),
+//!     Err(Error::NotReady) => eprintln!("Measurement not yet ready. Polling too fast?"),
+//!     Err(Error::NotInitialized) => eprintln!("You forgot to call .set_config"),
 //! }
 //! # }
 //! ```
@@ -139,10 +136,7 @@
 extern crate bitflags;
 
 use byteorder::{BigEndian, ByteOrder};
-use embedded_hal::blocking::{
-    delay::DelayMs,
-    i2c::{Read, Write, WriteRead},
-};
+use embedded_hal::{delay::DelayNs, i2c::I2c};
 
 extern crate measurements;
 use measurements::voltage::Voltage;
@@ -444,8 +438,8 @@ pub struct MCP3425<I2C, D, M> {
 
 impl<I2C, D, E, M> MCP3425<I2C, D, M>
 where
-    I2C: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,
-    D: DelayMs<u8>,
+    I2C: I2c<Error = E>,
+    D: DelayNs,
     M: ConversionMode,
 {
     /// Initialize the MCP3425 driver.
@@ -501,8 +495,8 @@ where
 
 impl<I2C, D, E> MCP3425<I2C, D, OneShotMode>
 where
-    I2C: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,
-    D: DelayMs<u8>,
+    I2C: I2c<Error = E>,
+    D: DelayNs,
 {
     /// Initialize the MCP3425 driver in One-Shot mode.
     ///
@@ -565,8 +559,8 @@ where
 
 impl<I2C, D, E> MCP3425<I2C, D, ContinuousMode>
 where
-    I2C: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,
-    D: DelayMs<u8>,
+    I2C: I2c<Error = E>,
+    D: DelayNs,
 {
     /// Initialize the MCP3425 driver in Continuous Measurement mode.
     ///
@@ -668,7 +662,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use embedded_hal_mock::eh0::{
+    use embedded_hal_mock::eh1::{
         delay::NoopDelay,
         i2c::{Mock as I2cMock, Transaction},
     };
