@@ -8,13 +8,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## Unreleased
 
-...
+### Added
 
+- no-std support
+- defmt feature
 
-## [2.0.0] - 2025-05-28
+### Fixed
+
+- Configured gain is considered when calculating voltage
 
 ### Changed
 
+- Removed custom voltage wrapper (measurements crate is not optional any more)
 - Upgrade to embedded-hal 1.0
 - Upgrade linux-embedded-hal dependency: 0.3 → 0.4
 - Upgrade bitflags dependency: 1.0 → 2.9
