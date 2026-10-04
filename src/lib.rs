@@ -167,12 +167,12 @@ pub enum Error<E> {
 
 bitflags! {
     struct ConfigRegister: u8 {
-        const NOT_READY = 0b10000000;
-        const MODE = 0b00010000;
-        const SAMPLE_RATE_H = 0b00001000;
-        const SAMPLE_RATE_L = 0b00000100;
-        const GAIN_H = 0b00000010;
-        const GAIN_L = 0b00000001;
+        const NOT_READY = 0b1000_0000;
+        const MODE = 0b0001_0000;
+        const SAMPLE_RATE_H = 0b0000_1000;
+        const SAMPLE_RATE_L = 0b0000_0100;
+        const GAIN_H = 0b0000_0010;
+        const GAIN_L = 0b0000_0001;
     }
 }
 
@@ -198,7 +198,7 @@ pub struct OneShotMode;
 
 impl ConversionMode for OneShotMode {
     fn bits(&self) -> u8 {
-        0b00000000
+        0b0000_0000
     }
 }
 
@@ -207,7 +207,7 @@ pub struct ContinuousMode;
 
 impl ConversionMode for ContinuousMode {
     fn bits(&self) -> u8 {
-        0b00010000
+        0b0001_0000
     }
 }
 
@@ -223,20 +223,22 @@ impl ConversionMode for ContinuousMode {
 #[derive(Debug, Copy, Clone)]
 pub enum Resolution {
     /// 16 bits / 15 SPS. This allows you to measure voltage in 62.5 µV steps.
-    Bits16Sps15 = 0b00001000,
+    Bits16Sps15 = 0b0000_1000,
     /// 14 bits / 60 SPS. This allows you to measure voltage in 250 µV steps.
-    Bits14Sps60 = 0b00000100,
+    Bits14Sps60 = 0b0000_0100,
     /// 12 bits / 240 SPS. This allows you to measure voltage in 1 mV steps.
-    Bits12Sps240 = 0b00000000,
+    Bits12Sps240 = 0b0000_0000,
 }
 
 impl Resolution {
     /// Return the bitmask for this sample rate.
+    #[must_use]
     pub fn bits(&self) -> u8 {
         *self as u8
     }
 
     /// Return the number of bits of accuracy this sample rate gives you.
+    #[must_use]
     pub fn res_bits(&self) -> u8 {
         match *self {
             Resolution::Bits16Sps15 => 16,
@@ -246,6 +248,7 @@ impl Resolution {
     }
 
     /// Return the maximum output code.
+    #[must_use]
     pub fn max(&self) -> i16 {
         match *self {
             Resolution::Bits16Sps15 => 32767,
@@ -255,6 +258,7 @@ impl Resolution {
     }
 
     /// Return the minimum output code.
+    #[must_use]
     pub fn min(&self) -> i16 {
         match *self {
             Resolution::Bits16Sps15 => -32768,
@@ -279,22 +283,24 @@ impl Default for Resolution {
 #[derive(Debug, Copy, Clone)]
 pub enum Gain {
     /// Amplification factor 1.
-    Gain1 = 0b00000000,
+    Gain1 = 0b0000_0000,
     /// Amplification factor 2.
-    Gain2 = 0b00000001,
+    Gain2 = 0b0000_0001,
     /// Amplification factor 4.
-    Gain4 = 0b00000010,
+    Gain4 = 0b0000_0010,
     /// Amplification factor 8.
-    Gain8 = 0b00000011,
+    Gain8 = 0b0000_0011,
 }
 
 impl Gain {
     /// Return the bitmask for this gain configuration.
+    #[must_use]
     pub fn bits(&self) -> u8 {
         *self as u8
     }
 
     /// Return the amplification factor for this gain configuration.
+    #[must_use]
     pub fn factor(&self) -> u8 {
         match *self {
             Gain::Gain1 => 1,
@@ -315,9 +321,10 @@ impl Default for Gain {
 /// Selected ADC channel
 ///
 /// Defaults to channel 1.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub enum Channel {
     /// First channel (Default)
+    #[default]
     Channel1 = 0b0000_0000,
     /// Second channel
     ///
@@ -339,14 +346,9 @@ pub enum Channel {
     Channel4 = 0b0110_0000,
 }
 
-impl Default for Channel {
-    fn default() -> Self {
-        Self::Channel1
-    }
-}
-
 impl Channel {
     /// Return the bitmask for this channel configuration.
+    #[must_use]
     pub fn bits(&self) -> u8 {
         *self as u8
     }
@@ -365,7 +367,7 @@ impl Channel {
 ///
 /// Default values:
 ///
-/// - Resolution: Bits12Sps240
+/// - Resolution: `Bits12Sps240`
 /// - Gain: Gain1
 /// - Channel: Channel1
 ///
@@ -386,6 +388,7 @@ pub struct Config {
 impl Config {
     /// Create a new configuration where the resolution has been replaced
     /// with the specified value.
+    #[must_use]
     pub fn with_resolution(&self, resolution: Resolution) -> Self {
         Config {
             resolution,
@@ -396,6 +399,7 @@ impl Config {
 
     /// Create a new configuration where the gain has been replaced
     /// with the specified value.
+    #[must_use]
     pub fn with_gain(&self, gain: Gain) -> Self {
         Config {
             resolution: self.resolution,
@@ -416,7 +420,7 @@ impl Config {
     }
 
     /// Return the bitmask for the combined configuration values.
-    fn bits(&self) -> u8 {
+    fn bits(self) -> u8 {
         self.channel.bits() | self.resolution.bits() | self.gain.bits()
     }
 }
@@ -469,10 +473,9 @@ where
     ///
     /// If the value is a saturation value, an error is returned.
     fn calculate_voltage(
-        &self,
-        measurement: i16,
-        resolution: &Resolution,
-        gain: &Gain,
+                measurement: i16,
+        resolution: Resolution,
+        gain: Gain,
     ) -> Result<Voltage, Error<E>> {
         // Handle saturation / out of range values
         if measurement == resolution.max() {
@@ -481,9 +484,9 @@ where
             return Err(Error::VoltageTooLow);
         }
 
-        let fraction = measurement as f64 / (1 << resolution.res_bits()) as f64;
+        let fraction = f64::from(measurement) / f64::from(1 << resolution.res_bits());
         Ok(Voltage::from_millivolts(
-            fraction * 2.0 * REF_MILLIVOLTS as f64 / gain.factor() as f64,
+            fraction * 2.0 * f64::from(REF_MILLIVOLTS) / f64::from(gain.factor()),
         ))
     }
 
@@ -551,7 +554,7 @@ where
         }
 
         // Calculate voltage from raw value
-        let voltage = self.calculate_voltage(measurement, &config.resolution, &config.gain)?;
+        let voltage = Self::calculate_voltage(measurement, config.resolution, config.gain)?;
 
         Ok(voltage)
     }
@@ -643,7 +646,7 @@ where
         let (measurement, config_reg) = self.read_i16_and_config()?;
 
         // Calculate voltage from raw value
-        let voltage = self.calculate_voltage(measurement, &config.resolution, &config.gain)?;
+        let voltage = Self::calculate_voltage(measurement, config.resolution, config.gain)?;
 
         // Check "Not Ready" flag. See datasheet section 5.1.1 for more details.
         if config_reg.is_ready() {
@@ -736,15 +739,15 @@ mod tests {
         #[case] gain: Gain,
         #[case] expected_millivolts: i16,
     ) {
-        let adc = MCP3425::oneshot(I2cMock::new(&[]), 0x42, NoopDelay);
-
-        let voltage = adc
-            .calculate_voltage(measurement, &resolution, &gain)
+        let voltage = MCP3425::<I2cMock, NoopDelay, OneShotMode>::calculate_voltage(
+measurement,
+resolution,
+gain,
+)
             .unwrap();
 
         assert_eq!(voltage.as_millivolts().round() as i16, expected_millivolts);
-        adc.destroy().done();
-    }
+            }
 
     /// Test saturation at various resolutions.
     #[rstest]
