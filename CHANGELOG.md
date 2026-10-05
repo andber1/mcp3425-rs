@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ### Added
 
 - no-std support
+- async support (new blocking (default) and async feature gates)
 - defmt feature
 
 ### Fixed

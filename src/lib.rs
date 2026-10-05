@@ -20,6 +20,9 @@
 //!
 //! The following feature flags exists:
 //!
+//! - `blocking` for the blocking `embedded-hal` API (enabled by default)
+//! - `async` for the async `embedded-hal-async` API (use with
+//!   `--no-default-features`)
 //! - `dual_channel` for dual-channel support (MCP3426/7/8)
 //! - `quad_channel` for dual-channel support (MCP3428)
 //!
@@ -132,11 +135,17 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(missing_docs)]
 
+#[cfg(all(feature = "blocking", feature = "async"))]
+compile_error!("Features `blocking` and `async` cannot currently be enabled at the same time");
+
 #[macro_use]
 extern crate bitflags;
 
 use byteorder::{BigEndian, ByteOrder};
+#[cfg(feature = "blocking")]
 use embedded_hal::{delay::DelayNs, i2c::I2c};
+#[cfg(feature = "async")]
+use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 
 extern crate measurements;
 use measurements::voltage::Voltage;
@@ -440,12 +449,7 @@ pub struct MCP3425<I2C, D, M> {
     config: Option<Config>,
 }
 
-impl<I2C, D, E, M> MCP3425<I2C, D, M>
-where
-    I2C: I2c<Error = E>,
-    D: DelayNs,
-    M: ConversionMode,
-{
+impl<I2C, D, M> MCP3425<I2C, D, M> {
     /// Initialize the MCP3425 driver.
     ///
     /// This constructor is side-effect free, so it will not write any
@@ -460,20 +464,17 @@ where
         }
     }
 
-    /// Read an i16 and the configuration register from the device.
-    fn read_i16_and_config(&mut self) -> Result<(i16, ConfigRegister), Error<E>> {
-        let mut buf = [0, 0, 0];
-        self.i2c.read(self.address, &mut buf).map_err(Error::I2c)?;
+    fn parse_i16_and_config(buf: [u8; 3]) -> (i16, ConfigRegister) {
         let measurement = BigEndian::read_i16(&buf[0..2]);
         let config_reg = ConfigRegister::from_bits_truncate(buf[2]);
-        Ok((measurement, config_reg))
+        (measurement, config_reg)
     }
 
     /// Calculate the voltage for the measurement result at the specified sample rate.
     ///
     /// If the value is a saturation value, an error is returned.
-    fn calculate_voltage(
-                measurement: i16,
+    fn calculate_voltage<E>(
+        measurement: i16,
         resolution: Resolution,
         gain: Gain,
     ) -> Result<Voltage, Error<E>> {
@@ -496,11 +497,7 @@ where
     }
 }
 
-impl<I2C, D, E> MCP3425<I2C, D, OneShotMode>
-where
-    I2C: I2c<Error = E>,
-    D: DelayNs,
-{
+impl<I2C, D> MCP3425<I2C, D, OneShotMode> {
     /// Initialize the MCP3425 driver in One-Shot mode.
     ///
     /// This constructor is side-effect free, so it will not write any
@@ -523,7 +520,54 @@ where
     pub fn into_continuous(self) -> MCP3425<I2C, D, ContinuousMode> {
         MCP3425::continuous(self.i2c, self.address, self.delay)
     }
+}
 
+impl<I2C, D> MCP3425<I2C, D, ContinuousMode> {
+    /// Initialize the MCP3425 driver in Continuous Measurement mode.
+    ///
+    /// This constructor is side-effect free, so it will not write any
+    /// configuration to the device until a first measurement is triggered.
+    pub fn continuous(i2c: I2C, address: u8, delay: D) -> Self {
+        MCP3425 {
+            i2c,
+            address,
+            delay,
+            mode: ContinuousMode,
+            config: None,
+        }
+    }
+
+    /// Change the conversion mode to one-shot.
+    ///
+    /// This conversion is side-effect free, so it will not write any
+    /// configuration to the device until a first one-shot measurement is
+    /// triggered.
+    pub fn into_oneshot(self) -> MCP3425<I2C, D, OneShotMode> {
+        MCP3425::oneshot(self.i2c, self.address, self.delay)
+    }
+}
+
+#[cfg(feature = "blocking")]
+impl<I2C, D, E, M> MCP3425<I2C, D, M>
+where
+    I2C: I2c<Error = E>,
+    D: DelayNs,
+    M: ConversionMode,
+{
+    /// Read an i16 and the configuration register from the device.
+    fn read_i16_and_config(&mut self) -> Result<(i16, ConfigRegister), Error<E>> {
+        let mut buf = [0, 0, 0];
+        self.i2c.read(self.address, &mut buf).map_err(Error::I2c)?;
+        Ok(Self::parse_i16_and_config(buf))
+    }
+}
+
+#[cfg(feature = "blocking")]
+impl<I2C, D, E> MCP3425<I2C, D, OneShotMode>
+where
+    I2C: I2c<Error = E>,
+    D: DelayNs,
+{
     /// Do a one-shot voltage measurement.
     ///
     /// Return the result in millivolts.
@@ -554,40 +598,16 @@ where
         }
 
         // Calculate voltage from raw value
-        let voltage = Self::calculate_voltage(measurement, config.resolution, config.gain)?;
-
-        Ok(voltage)
+        Self::calculate_voltage::<E>(measurement, config.resolution, config.gain)
     }
 }
 
+#[cfg(feature = "blocking")]
 impl<I2C, D, E> MCP3425<I2C, D, ContinuousMode>
 where
     I2C: I2c<Error = E>,
     D: DelayNs,
 {
-    /// Initialize the MCP3425 driver in Continuous Measurement mode.
-    ///
-    /// This constructor is side-effect free, so it will not write any
-    /// configuration to the device until a first measurement is triggered.
-    pub fn continuous(i2c: I2C, address: u8, delay: D) -> Self {
-        MCP3425 {
-            i2c,
-            address,
-            delay,
-            mode: ContinuousMode,
-            config: None,
-        }
-    }
-
-    /// Change the conversion mode to one-shot.
-    ///
-    /// This conversion is side-effect free, so it will not write any
-    /// configuration to the device until a first one-shot measurement is
-    /// triggered.
-    pub fn into_oneshot(self) -> MCP3425<I2C, D, OneShotMode> {
-        MCP3425::oneshot(self.i2c, self.address, self.delay)
-    }
-
     /// Write the specified configuration to the device and block until the
     /// first measurement is ready.
     ///
@@ -646,7 +666,7 @@ where
         let (measurement, config_reg) = self.read_i16_and_config()?;
 
         // Calculate voltage from raw value
-        let voltage = Self::calculate_voltage(measurement, config.resolution, config.gain)?;
+        let voltage = Self::calculate_voltage::<E>(measurement, config.resolution, config.gain)?;
 
         // Check "Not Ready" flag. See datasheet section 5.1.1 for more details.
         if config_reg.is_ready() {
@@ -663,7 +683,113 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "async")]
+impl<I2C, D, E, M> MCP3425<I2C, D, M>
+where
+    I2C: I2c<Error = E>,
+    D: DelayNs,
+    M: ConversionMode,
+{
+    async fn read_i16_and_config(&mut self) -> Result<(i16, ConfigRegister), Error<E>> {
+        let mut buf = [0, 0, 0];
+        self.i2c
+            .read(self.address, &mut buf)
+            .await
+            .map_err(Error::I2c)?;
+        Ok(Self::parse_i16_and_config(buf))
+    }
+}
+
+#[cfg(feature = "async")]
+impl<I2C, D, E> MCP3425<I2C, D, OneShotMode>
+where
+    I2C: I2c<Error = E>,
+    D: DelayNs,
+{
+    /// Do an asynchronous one-shot voltage measurement.
+    ///
+    /// Return the result in millivolts.
+    pub async fn measure(&mut self, config: &Config) -> Result<Voltage, Error<E>> {
+        let command = ConfigRegister::NOT_READY.bits() | self.mode.bits() | config.bits();
+        self.i2c
+            .write(self.address, &[command])
+            .await
+            .map_err(Error::I2c)?;
+
+        let sleep_ms = match config.resolution {
+            Resolution::Bits12Sps240 => 4,
+            Resolution::Bits14Sps60 => 15,
+            Resolution::Bits16Sps15 => 57,
+        };
+        self.delay.delay_ms(sleep_ms + 2).await;
+
+        let (measurement, config_reg) = self.read_i16_and_config().await?;
+        if !config_reg.is_ready() {
+            return Err(Error::NotReady);
+        }
+
+        Self::calculate_voltage::<E>(measurement, config.resolution, config.gain)
+    }
+}
+
+#[cfg(feature = "async")]
+impl<I2C, D, E> MCP3425<I2C, D, ContinuousMode>
+where
+    I2C: I2c<Error = E>,
+    D: DelayNs,
+{
+    /// Write the specified configuration to the device and asynchronously wait
+    /// until the first measurement is ready.
+    ///
+    /// The wait-for-measurement logic is implemented with polling.
+    pub async fn set_config(&mut self, config: &Config) -> Result<(), Error<E>> {
+        let command = self.mode.bits() | config.bits();
+        self.i2c
+            .write(self.address, &[command])
+            .await
+            .map(|()| self.config = Some(*config))
+            .map_err(Error::I2c)?;
+
+        let sleep_ms = match config.resolution {
+            Resolution::Bits12Sps240 => 4,
+            Resolution::Bits14Sps60 => 15,
+            Resolution::Bits16Sps15 => 57,
+        };
+        self.delay.delay_ms(sleep_ms).await;
+
+        let mut buf = [0, 0, 0];
+        loop {
+            self.i2c
+                .read(self.address, &mut buf)
+                .await
+                .map_err(Error::I2c)?;
+            if (buf[2] & ConfigRegister::NOT_READY.bits()) == ConfigRegister::NOT_READY.bits() {
+                self.delay.delay_ms(1).await;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a measurement from the device.
+    ///
+    /// Note that [`set_config`](Self::set_config) must have been called first,
+    /// otherwise [`Error::NotInitialized`] is returned. Polling faster than
+    /// the sample rate returns [`Error::NotReady`].
+    pub async fn read_measurement(&mut self) -> Result<Voltage, Error<E>> {
+        let config = self.config.ok_or(Error::NotInitialized)?;
+        let (measurement, config_reg) = self.read_i16_and_config().await?;
+        let voltage = Self::calculate_voltage::<E>(measurement, config.resolution, config.gain)?;
+        if config_reg.is_ready() {
+            Ok(voltage)
+        } else {
+            Err(Error::NotReady)
+        }
+    }
+}
+
+#[cfg(all(test, feature = "blocking"))]
 mod tests {
     use embedded_hal_mock::eh1::{
         delay::NoopDelay,
@@ -739,15 +865,13 @@ mod tests {
         #[case] gain: Gain,
         #[case] expected_millivolts: i16,
     ) {
-        let voltage = MCP3425::<I2cMock, NoopDelay, OneShotMode>::calculate_voltage(
-measurement,
-resolution,
-gain,
-)
-            .unwrap();
+        let voltage = MCP3425::<I2cMock, NoopDelay, OneShotMode>::calculate_voltage::<
+            core::convert::Infallible,
+        >(measurement, resolution, gain)
+        .unwrap();
 
         assert_eq!(voltage.as_millivolts().round() as i16, expected_millivolts);
-            }
+    }
 
     /// Test saturation at various resolutions.
     #[rstest]
