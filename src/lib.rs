@@ -25,6 +25,12 @@
 //!   `--no-default-features`)
 //! - `dual_channel` for dual-channel support (MCP3426/7/8)
 //! - `quad_channel` for dual-channel support (MCP3428)
+//! - `measurements` for conversion to `measurements::voltage::Voltage`
+//! - `uom` for conversion to `uom::si::f32::ElectricPotential`
+//!
+//! Measurements always return this crate's [`Voltage`] type. Convert it to
+//! another unit crate's type with `.into()` when the corresponding feature is
+//! enabled, or use [`Voltage::as_volts`] to convert it yourself.
 //!
 //! ## Usage
 //!
@@ -147,8 +153,40 @@ use embedded_hal::{delay::DelayNs, i2c::I2c};
 #[cfg(feature = "async")]
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 
-extern crate measurements;
-use measurements::voltage::Voltage;
+/// A voltage measurement, represented internally in volts as an `f32`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Voltage(f32);
+
+impl Voltage {
+    /// Create a voltage value from volts.
+    pub const fn from_volts(volts: f32) -> Self {
+        Self(volts)
+    }
+
+    /// Return the voltage in volts.
+    pub const fn as_volts(self) -> f32 {
+        self.0
+    }
+
+    /// Return the voltage in millivolts.
+    pub const fn as_millivolts(self) -> f32 {
+        self.0 * 1_000.0
+    }
+}
+
+#[cfg(feature = "measurements")]
+impl From<Voltage> for measurements::voltage::Voltage {
+    fn from(voltage: Voltage) -> Self {
+        Self::from_volts(f64::from(voltage.as_volts()))
+    }
+}
+
+#[cfg(feature = "uom")]
+impl From<Voltage> for uom::si::f32::ElectricPotential {
+    fn from(voltage: Voltage) -> Self {
+        Self::new::<uom::si::electric_potential::volt>(voltage.as_volts())
+    }
+}
 
 /// All possible errors in this crate
 #[derive(Debug)]
@@ -485,10 +523,9 @@ impl<I2C, D, M> MCP3425<I2C, D, M> {
             return Err(Error::VoltageTooLow);
         }
 
-        let fraction = f64::from(measurement) / f64::from(1 << resolution.res_bits());
-        Ok(Voltage::from_millivolts(
-            fraction * 2.0 * f64::from(REF_MILLIVOLTS) / f64::from(gain.factor()),
-        ))
+        let fraction = f32::from(measurement) / (1 << resolution.res_bits()) as f32;
+        let volts = fraction * 2.0 * f32::from(REF_MILLIVOLTS) / f32::from(gain.factor()) / 1_000.0;
+        Ok(Voltage::from_volts(volts))
     }
 
     /// Destroy the driver instance and return the I2C device.
@@ -570,7 +607,7 @@ where
 {
     /// Do a one-shot voltage measurement.
     ///
-    /// Return the result in millivolts.
+    /// Return the result as a [`Voltage`], with accessors for volts and millivolts.
     pub fn measure(&mut self, config: &Config) -> Result<Voltage, Error<E>> {
         let command = ConfigRegister::NOT_READY.bits() | self.mode.bits() | config.bits();
 
@@ -708,7 +745,7 @@ where
 {
     /// Do an asynchronous one-shot voltage measurement.
     ///
-    /// Return the result in millivolts.
+    /// Return the result as a [`Voltage`], with accessors for volts and millivolts.
     pub async fn measure(&mut self, config: &Config) -> Result<Voltage, Error<E>> {
         let command = ConfigRegister::NOT_READY.bits() | self.mode.bits() | config.bits();
         self.i2c
@@ -798,6 +835,27 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[test]
+    fn voltage_accessors_use_volts_and_millivolts() {
+        let voltage = Voltage::from_volts(1.25);
+        assert_eq!(voltage.as_volts(), 1.25);
+        assert_eq!(voltage.as_millivolts(), 1_250.0);
+    }
+
+    #[cfg(feature = "measurements")]
+    #[test]
+    fn voltage_converts_to_measurements() {
+        let voltage: measurements::voltage::Voltage = Voltage::from_volts(1.25).into();
+        assert_eq!(voltage.as_millivolts(), 1_250.0);
+    }
+
+    #[cfg(feature = "uom")]
+    #[test]
+    fn voltage_converts_to_uom() {
+        let voltage: uom::si::f32::ElectricPotential = Voltage::from_volts(1.25).into();
+        assert_eq!(voltage.get::<uom::si::electric_potential::volt>(), 1.25);
+    }
 
     /// Instantiation in one-shot mode should not do any calls to the I2C bus.
     #[test]

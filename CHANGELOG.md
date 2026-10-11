@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Removed custom voltage wrapper (measurements crate is not optional any more)
+- Return a crate-owned `f32` voltage type, with optional `measurements` and `uom` conversions
 - Upgrade to embedded-hal 1.0
 - Upgrade linux-embedded-hal dependency: 0.3 → 0.4
 - Upgrade bitflags dependency: 1.0 → 2.9
